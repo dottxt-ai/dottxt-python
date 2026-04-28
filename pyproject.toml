@@ -1,13 +1,15 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = [ "setuptools>=64", "setuptools-scm>=8", "wheel" ]
+requires = [ "setuptools>=77", "setuptools-scm>=8", "wheel" ]
 
 [project]
 name = "dottxt"
 description = "The official library for the .txt platform"
 readme.content-type = "text/markdown"
 readme.file = "README.md"
-authors = [ { name = ".txt ", email = "support@dottxt.ai" } ]
+license = "Apache-2.0"
+license-files = [ "LICENSE" ]
+authors = [ { name = "dottxt", email = "contact@dottxt.ai" } ]
 requires-python = ">=3.10"
 classifiers = [
   "Programming Language :: Python :: 3 :: Only",
