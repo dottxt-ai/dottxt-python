@@ -1,0 +1,65 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = [ "setuptools>=64", "setuptools-scm>=8", "wheel" ]
+
+[project]
+name = "dottxt"
+description = "The official library for the .txt platform"
+readme.content-type = "text/markdown"
+readme.file = "README.md"
+authors = [ { name = ".txt ", email = "support@dottxt.ai" } ]
+requires-python = ">=3.10"
+classifiers = [
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+]
+dynamic = [ "version" ]
+dependencies = [
+  "click>=8.1",
+  "jsonschema>=4.26",
+  "openai>=2.31",
+  "pydantic>=2",
+]
+urls.repository = "https://github.com/dottxt-ai/dottxt-python"
+scripts.dottxt = "dottxt.cli:main"
+
+[dependency-groups]
+dev = [
+  "mypy",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "ruff>=0.15.11",
+  "types-jsonschema>=4.26.0.20260408",
+]
+
+[tool.setuptools]
+packages = [
+  "dottxt",
+]
+package-dir = { "" = "src" }
+
+[tool.setuptools_scm]
+version_file = "src/dottxt/_version.py"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+lint.select = [ "B", "E", "F", "I", "UP" ]
+
+[tool.pytest]
+ini_options.pythonpath = [ "src" ]
+
+[tool.coverage]
+run.branch = true
+run.omit = [ "examples/*", "src/dottxt/_version.py", "tests/*" ]
+report.omit = [
+  "examples/*",
+  "src/test/*",
+  "tests/*",
+]
+report.show_missing = true
