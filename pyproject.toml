@@ -24,7 +24,7 @@ dependencies = [
   "click>=8.1",
   "jsonschema>=4.26",
   "openai>=2.31",
-  "pydantic>=2",
+  "pydantic>=2.11",
 ]
 urls.repository = "https://github.com/dottxt-ai/dottxt-python"
 scripts.dottxt = "dottxt.cli:main"
