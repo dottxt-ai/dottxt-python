@@ -180,6 +180,7 @@ def test_login_persists_credentials(
 ) -> None:
     """Login should persist credentials from stdin."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("DOTTXT_API_KEY", raising=False)
     result = _invoke(runner, ["login"], input_text="test-key\n")
 
     assert result.exit_code == 0
@@ -199,6 +200,7 @@ def test_login_verbose_prints_full_payload(
 ) -> None:
     """JSON login should print payload details while verbose stays orthogonal."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("DOTTXT_API_KEY", raising=False)
     payload = _invoke_json(
         runner,
         ["--json", "--verbose", "login"],
@@ -418,6 +420,116 @@ def test_models_fails_without_available_api_key(
 
     assert result.exit_code == 1
     assert "No API key available" in result.output
+
+
+def test_schema_check_succeeds_with_valid_schema(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """schema check should print success for valid JSON Schema files."""
+    result = _invoke(runner, ["schema", "check", str(schema_file)])
+
+    assert result.exit_code == 0
+    assert result.output.strip() == f"Schema is valid JSON Schema: {schema_file}"
+
+
+def test_schema_check_json_mode_returns_summary_payload(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """schema check JSON mode should return minimal success payload."""
+    payload = _invoke_json(runner, ["--json", "schema", "check", str(schema_file)])
+
+    assert isinstance(payload, dict)
+    assert payload == {
+        "status": "ok",
+        "schema_file": str(schema_file),
+    }
+
+
+def test_schema_check_fails_for_invalid_json_schema(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check should reject malformed JSON Schema documents."""
+    invalid_schema = _create_schema(tmp_path, content='{"type": 1}')
+
+    result = _invoke(runner, ["schema", "check", str(invalid_schema)])
+
+    assert result.exit_code == 1
+    assert "Schema file is invalid:" in result.output
+    assert "is not valid under any of the given schemas" in result.output
+
+
+def test_schema_check_fails_for_empty_schema_file(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check should reject empty schema files as invalid JSON."""
+    empty_schema = _create_schema(tmp_path, content="")
+
+    result = _invoke(runner, ["schema", "check", str(empty_schema)])
+
+    assert result.exit_code == 1
+    assert "Schema file is invalid:" in result.output
+    assert "schema file must contain valid JSON" in result.output
+
+
+def test_schema_check_fails_for_invalid_json_syntax(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check should reject schema files that are not valid JSON."""
+    invalid_json_schema = _create_schema(tmp_path, content="{")
+
+    result = _invoke(runner, ["schema", "check", str(invalid_json_schema)])
+
+    assert result.exit_code == 1
+    assert "Schema file is invalid:" in result.output
+    assert "schema file must contain valid JSON" in result.output
+
+
+def test_schema_check_fails_for_non_object_json(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check should reject JSON values that are not objects."""
+    array_schema = _create_schema(tmp_path, content="[]")
+
+    result = _invoke(runner, ["schema", "check", str(array_schema)])
+
+    assert result.exit_code == 1
+    assert "Schema file is invalid:" in result.output
+    assert "schema must contain a JSON object" in result.output
+
+
+def test_schema_check_missing_file_human_mode_error_message(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check should show a clean not-found message in human mode."""
+    missing_schema = tmp_path / "missing-schema-human.json"
+
+    result = _invoke(runner, ["schema", "check", str(missing_schema)])
+
+    assert result.exit_code == 1
+    assert f"Schema file not found: {missing_schema}" in result.output
+
+
+def test_schema_check_json_mode_errors_are_machine_readable(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """schema check errors should use the shared JSON error envelope."""
+    missing_schema = tmp_path / "missing-schema.json"
+    result = _invoke(runner, ["--json", "schema", "check", str(missing_schema)])
+
+    assert result.exit_code == 1
+    payload = _parse_json_output(result.output)
+    assert isinstance(payload, dict)
+    assert payload == {
+        "error": {"message": f"Schema file not found: {missing_schema}"},
+    }
 
 
 @pytest.mark.parametrize(
@@ -665,10 +777,65 @@ def test_generate_error_paths_and_usage_codes(
     usage_error = _invoke(runner, ["generate", "--unknown-flag"])
 
     assert invalid_json.exit_code == 1
-    assert "not valid JSON" in invalid_json.output
+    assert "Schema file is invalid:" in invalid_json.output
+    assert "must contain valid JSON" in invalid_json.output
     assert missing_schema_usage.exit_code == 2
     assert "Missing option '-s' / '--schema'" in missing_schema_usage.output
     assert usage_error.exit_code == 2
+
+
+def test_generate_rejects_invalid_json_schema_before_sdk_call(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """Generate should fail fast for invalid JSON Schema documents."""
+    invalid_schema = _create_schema(
+        tmp_path,
+        name="invalid-schema.json",
+        content='{"type": 1}',
+    )
+
+    result = _invoke(
+        runner,
+        ["generate", "-m", "openai/gpt-oss-20b", "-s", str(invalid_schema), "x y"],
+    )
+
+    assert result.exit_code == 1
+    assert "Schema file is invalid:" in result.output
+    assert "is not valid under any of the given schemas" in result.output
+    assert FakeDotTxt.generate_calls == []
+
+
+def test_generate_invalid_json_schema_json_mode_is_machine_readable(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """Generate invalid schema errors should use the shared JSON envelope."""
+    invalid_schema = _create_schema(
+        tmp_path,
+        name="invalid-schema.json",
+        content='{"type": 1}',
+    )
+
+    result = _invoke(
+        runner,
+        [
+            "--json",
+            "generate",
+            "-m",
+            "openai/gpt-oss-20b",
+            "-s",
+            str(invalid_schema),
+            "x y",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = _parse_json_output(result.output)
+    assert isinstance(payload, dict)
+    assert payload["error"]["message"].startswith("Schema file is invalid:")
+    assert "is not valid under any of the given schemas" in payload["error"]["message"]
+    assert FakeDotTxt.generate_calls == []
 
 
 def test_generate_requires_model_when_env_default_missing(

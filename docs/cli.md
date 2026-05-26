@@ -73,3 +73,12 @@ Output rules:
 - If the selected model is unavailable for your key, generate returns a
   targeted error with guidance to run `dottxt models` and set `DOTTXT_MODEL`
   or pass `--model`
+
+### `dottxt schema check`
+
+Validate a schema file as JSON Schema.
+
+- Usage (file): `dottxt schema check schema.json`
+- `<schema-file>`: JSON file path to validate
+- `--json`: emits structured payload including `status` and `schema_file`
+- Errors follow the shared `--json` error envelope when enabled

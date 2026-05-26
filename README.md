@@ -44,6 +44,7 @@ Use the `dottxt` CLI for login, model discovery, and one-off generation.
 
 - CLI reference: [docs/cli.md](docs/cli.md)
 - Client reference: [docs/client.md](docs/client.md)
+- Schema validation: `dottxt schema check schema.json`
 
 ## Client Surfaces
 
