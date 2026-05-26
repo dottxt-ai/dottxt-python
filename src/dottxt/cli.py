@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import click
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import SchemaError
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -196,6 +198,52 @@ def _stdin_is_tty() -> bool:
 def _read_stdin() -> str:
     """Read full stdin content until EOF."""
     return sys.stdin.read()
+
+
+def _load_schema_file(
+    schema_file: Path,
+    *,
+    json_mode: bool,
+) -> tuple[str, Any]:
+    """Read and validate a schema file.
+
+    Args:
+        schema_file: Path to schema JSON file.
+        json_mode: Whether machine-readable errors should be emitted.
+
+    Returns:
+        Tuple of raw schema text and parsed JSON payload.
+
+    Raises:
+        click.ClickException: When file is missing, invalid JSON, or invalid schema.
+    """
+    try:
+        schema_text = schema_file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        _fail(f"Schema file not found: {schema_file}", json_mode=json_mode)
+
+    try:
+        schema_payload = json.loads(schema_text)
+    except json.JSONDecodeError:
+        _fail(
+            "Schema file is invalid: schema file must contain valid JSON",
+            json_mode=json_mode,
+        )
+    if not isinstance(schema_payload, dict):
+        _fail(
+            "Schema file is invalid: schema must contain a JSON object",
+            json_mode=json_mode,
+        )
+
+    try:
+        Draft202012Validator.check_schema(schema_payload)
+    except SchemaError as exc:
+        _fail(
+            f"Schema file is invalid: {exc}",
+            json_mode=json_mode,
+        )
+
+    return schema_text, schema_payload
 
 
 def _emit_verbose(ctx: click.Context, message: str, *, data: Any | None = None) -> None:
@@ -418,6 +466,43 @@ def models(ctx: click.Context, author: str | None) -> None:
         click.echo(model_id)
 
 
+@main.group()
+def schema() -> None:
+    """Schema utilities."""
+
+
+@schema.command(name="check")
+@click.argument(
+    "schema_file",
+    required=True,
+    metavar="<SCHEMA_FILE>",
+    type=click.Path(dir_okay=False, path_type=Path),
+)
+@click.pass_context
+def schema_check(ctx: click.Context, schema_file: Path) -> None:
+    """Validate a JSON Schema file."""
+    json_mode = bool(ctx.obj["json_mode"])
+    _load_schema_file(
+        schema_file,
+        json_mode=json_mode,
+    )
+    _emit_verbose(
+        ctx,
+        "Validated schema file.",
+        data={"schema_file": str(schema_file)},
+    )
+    if json_mode:
+        _emit(
+            {
+                "status": "ok",
+                "schema_file": str(schema_file),
+            },
+            json_mode=True,
+        )
+        return
+    click.echo(f"Schema is valid JSON Schema: {schema_file}")
+
+
 @main.command(name="generate")
 @click.option(
     "-m",
@@ -449,16 +534,10 @@ def generate(
     The model resolves from --model, then DOTTXT_MODEL.
     """
     json_mode = bool(ctx.obj["json_mode"])
-    if not schema_file.exists() or not schema_file.is_file():
-        message = f"Schema file not found: {schema_file}"
-        _fail(message, json_mode=json_mode)
-
-    schema_text = schema_file.read_text(encoding="utf-8")
-    try:
-        schema_payload = json.loads(schema_text)
-    except json.JSONDecodeError as exc:
-        message = f"Schema file is not valid JSON: {exc.msg}"
-        _fail(message, json_mode=json_mode)
+    schema_text, schema_payload = _load_schema_file(
+        schema_file,
+        json_mode=json_mode,
+    )
 
     if prompt_arg is not None:
         final_prompt = prompt_arg
