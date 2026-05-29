@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import AsyncIterator
 from typing import Any
 
 from openai import AsyncOpenAI as AsyncOpenAISDK
 from openai import OpenAI as OpenAISDK
 from pydantic import BaseModel, ValidationError
 
-from dottxt.schemas import SchemaInput, build_response_format
+from dottxt.schemas import SchemaInput, build_chat_payload
+from dottxt.streaming import PatchEvent
+from dottxt.streaming import stream as _stream
 
 DEFAULT_BASE_URL = "https://api.dottxt.ai/v1"
 
@@ -118,20 +121,15 @@ class DotTxt:
         Returns:
             A parsed Pydantic model or decoded JSON object.
         """
-        if isinstance(input, str):
-            input = [{"role": "user", "content": input}]
-        payload: dict[str, Any] = {
-            **extra,
-            "model": model,
-            "messages": input,
-            "response_format": build_response_format(response_format),
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if seed is not None:
-            payload["seed"] = seed
+        payload = build_chat_payload(
+            model=model,
+            response_format=response_format,
+            input=input,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            extra=extra,
+        )
         completion = self.chat.completions.create(**payload)
         completion_text = _completion_text(completion)
         try:
@@ -213,20 +211,15 @@ class AsyncDotTxt:
         Returns:
             A parsed Pydantic model or decoded JSON object.
         """
-        if isinstance(input, str):
-            input = [{"role": "user", "content": input}]
-        payload: dict[str, Any] = {
-            **extra,
-            "model": model,
-            "messages": input,
-            "response_format": build_response_format(response_format),
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max_tokens
-        if seed is not None:
-            payload["seed"] = seed
+        payload = build_chat_payload(
+            model=model,
+            response_format=response_format,
+            input=input,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            extra=extra,
+        )
         completion = await self.chat.completions.create(**payload)
         completion_text = _completion_text(completion)
         try:
@@ -238,6 +231,56 @@ class AsyncDotTxt:
                 finish_reason=_completion_finish_reason(completion),
                 original_error=exc,
             ) from exc
+
+    async def stream(
+        self,
+        *,
+        model: str,
+        response_format: SchemaInput,
+        input: str | list[dict[str, Any]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        timeout: float = 60.0,
+        extra: dict[str, Any] | None = None,
+    ) -> AsyncIterator[PatchEvent]:
+        """Stream ``PatchEvent``\\ s as the model fills in a structured response.
+
+        The dottxt gateway emits one RFC 6902 ``add`` op per JSON token. Each
+        event carries the raw op (``event.op``) and an independent snapshot
+        of the document built up to and including that op (``event.snapshot``).
+
+        Args:
+            model: Model identifier.
+            response_format: Schema input accepted by ``build_response_format``.
+            input: A prompt string or a list of chat messages.
+            temperature: Optional temperature value.
+            max_tokens: Optional max output tokens.
+            seed: Optional deterministic seed.
+            timeout: HTTP timeout in seconds.
+            extra: Additional chat-completions parameters merged into the body.
+
+        Yields:
+            ``PatchEvent`` objects in the order the gateway produced them.
+
+        Raises:
+            PatchStreamError: If the upstream returns a non-200 status.
+        """
+        base_url = str(self._client.base_url)
+        api_key = self._client.api_key
+        async for event in _stream(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            response_format=response_format,
+            input=input,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+            timeout=timeout,
+            extra=extra,
+        ):
+            yield event
 
     async def close(self) -> None:
         """Close the underlying SDK client."""

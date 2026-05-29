@@ -163,6 +163,62 @@ For direct `chat.completions.create(...)`, pass the wrapped OpenAI-style
 
 Use `DotTxt.models.list()` and `AsyncDotTxt.models.list()` for model listing.
 
+## Streaming Fields
+
+`AsyncDotTxt.stream(...)` yields `PatchEvent` objects as the model fills in a
+schema-constrained response. The wire format is the gateway's `stream: "patch"`
+mode (RFC 6902 JSON Patch over NDJSON).
+
+Each event carries the raw op (`event.op`) and an independent deep copy of the
+document so far (`event.snapshot`). For the common case of reacting to one
+field at a time, use the demux properties: `event.is_leaf` skips structural
+ops (root seed, empty-container init), `event.field` is the JSON Pointer with
+the leading `/` stripped (`"intent"`, `"steps/0"`, `"address/city"`), and
+`event.value` is the op's value.
+
+```python
+import asyncio
+from typing import Literal
+
+from pydantic import BaseModel
+
+from dottxt import AsyncDotTxt
+
+
+class SupportTicket(BaseModel):
+    # Field order = arrival order. Put what unblocks downstream work first.
+    intent: Literal["billing", "technical", "account"]
+    urgency: Literal["low", "medium", "high", "critical"]
+    reply: str
+
+
+async def main() -> None:
+    client = AsyncDotTxt()
+    stream = client.stream(
+        model="openai/gpt-oss-20b",
+        response_format=SupportTicket,
+        input="I was charged twice this month, please refund the duplicate.",
+    )
+    async for event in stream:
+        if not event.is_leaf:
+            continue
+        match event.field:
+            case "intent":
+                print(f"dispatching to {event.value} queue")
+            case "urgency" if event.value == "critical":
+                print("paging oncall")
+            case "reply":
+                print(f"reply: {event.value}")
+
+
+asyncio.run(main())
+```
+
+The routing decision can fire tens of milliseconds into generation while
+`reply` continues to stream. See
+[docs/client.md](docs/client.md#streaming-fields-patch-stream) for the full
+reference.
+
 ## OpenAI-Compatible Usage
 
 Use `DotTxt` when you want an OpenAI-style client surface with
@@ -224,3 +280,8 @@ The compatibility surface expects the wrapped OpenAI-style
 - [Use a Genson schema builder to generate](examples/generate_genson.py)
 - [List available models](examples/list_models.py)
 - [OpenAI-Compatible chat completions](examples/openai_chat_completions.py)
+- [Stream fields as they arrive](examples/stream_field_printer.py)
+- [Route on /intent before /reply finishes](examples/stream_early_routing.py)
+- [Mid-stream human approval](examples/stream_hitl_approval.py)
+- [Fan out research on each /steps/N](examples/stream_fanout.py)
+- [Reconstruct the document from raw patch ops](examples/stream_reconstruct.py)

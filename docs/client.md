@@ -30,7 +30,7 @@ Requires Python 3.10+.
 The client takes two arguments. Each is read from the constructor first, then
 from the environment.
 
-- `api_key` (`str | None`): falls back to `DOTTXT_API_KEY`. Required — the
+- `api_key` (`str | None`): falls back to `DOTTXT_API_KEY`. Required, the
   constructor raises `ValueError` if neither is set.
 - `base_url` (`str | None`): falls back to `DOTTXT_BASE_URL`, then to
   `https://api.dottxt.ai/v1`.
@@ -209,11 +209,81 @@ result = client.generate(
 print(result) # {'severity': 'high', 'team': 'checkout'}
 ```
 
+## Streaming Fields (Patch Stream)
+
+`AsyncDotTxt.stream(...)` yields `PatchEvent` objects as the model fills in a
+schema-constrained response. It is built on the gateway's `stream: "patch"`
+mode, which emits RFC 6902 JSON Patch operations in schema order, so
+downstream work can start the moment a field arrives, without waiting for
+the closing brace.
+
+Parameters mirror `generate(...)`:
+
+- `model` (`str`)
+- `input` (`str | list[dict]`)
+- `response_format` (`Any`) — any schema input accepted by `generate(...)`
+- `temperature`, `max_tokens`, `seed`, `timeout` — optional
+- `extra` (`dict | None`) — extra chat-completions body fields
+
+Each `PatchEvent` carries:
+
+- `event.op` — the raw RFC 6902 operation (`{"op": "add", "path": ..., "value": ...}`)
+- `event.snapshot` — an independent deep copy of the JSON object built up to
+  and including this op
+- `event.is_leaf` / `event.field` / `event.value` convenience demux for
+  the common case of reacting to one field at a time. `is_leaf` is `True`
+  for non-structural adds (skipping the root seed and empty-container init
+  ops); `field` is the JSON Pointer with the leading `/` stripped
+  (`"intent"`, `"steps/0"`, `"address/city"`).
+
+```python
+import asyncio
+from typing import Literal
+from pydantic import BaseModel
+from dottxt import AsyncDotTxt
+
+class SupportTicket(BaseModel):
+    # Field order = arrival order. Put what unblocks downstream work first.
+    intent: Literal["billing", "technical", "account"]
+    urgency: Literal["low", "medium", "high", "critical"]
+    reply: str
+
+async def main():
+    client = AsyncDotTxt()
+    stream = client.stream(
+        model="openai/gpt-oss-20b",
+        response_format=SupportTicket,
+        input="I was charged twice this month, please refund the duplicate.",
+    )
+    async for event in stream:
+        if not event.is_leaf:
+            continue
+        match event.field:
+            case "intent":
+                asyncio.create_task(dispatch_to_queue(event.value))
+            case "urgency" if event.value == "critical":
+                asyncio.create_task(page_oncall())
+            case "reply":
+                await send(event.value)
+
+asyncio.run(main())
+```
+
+The routing decision fires the moment `intent` arrives, typically tens of
+milliseconds in while `reply` continues to stream. If you need the full
+object so far (e.g. to log progress or hand a partial object to another
+service), use `event.snapshot`.
+
+Errors:
+
+- `dottxt.PatchStreamError`: raised when the gateway returns a non-200
+  status. Exposes `status_code` and `body`.
+
 ## OpenAI-Compatible Text Generation
 
 If you prefer the standard OpenAI SDK surface, you can call
 `chat.completions.create(...)` directly. The client passes the call through
-unchanged and returns the raw chat completion object — parsing and
+unchanged and returns the raw chat completion object, parsing and
 validation are up to the caller.
 
 For structured output, pass the wrapped OpenAI-style `response_format`
@@ -268,3 +338,11 @@ Runnable examples live in the [`examples/`](../examples) directory:
 - [`list_models.py`](../examples/list_models.py): list available models
 - [`openai_chat_completions.py`](../examples/openai_chat_completions.py): use
   the OpenAI-compatible `chat.completions.create` surface
+- [`stream_field_printer.py`](../examples/stream_field_printer.py): minimal
+  `stream` demo — print each leaf field and value as it lands
+- [`stream_early_routing.py`](../examples/stream_early_routing.py): route on
+  `/intent` while `/reply` is still streaming
+- [`stream_hitl_approval.py`](../examples/stream_hitl_approval.py): approve a
+  proposed action mid-stream and discard the reply if the operator declines
+- [`stream_fanout.py`](../examples/stream_fanout.py): fan research tasks out
+  on each `/steps/N` as the planner emits them

@@ -124,3 +124,52 @@ def build_response_format(
             "schema": normalize_schema(schema),
         },
     }
+
+
+def build_chat_payload(
+    *,
+    model: str,
+    response_format: SchemaInput,
+    input: str | list[dict[str, Any]],
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    seed: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Assemble a chat-completions request body.
+
+    Shared by ``generate()`` (sync + async) and the patch-stream consumer so
+    input normalization, ``response_format`` wrapping, and conditional
+    generation params live in one place. Callers add transport-specific keys
+    (e.g. ``stream: "patch"``) to the returned dict.
+
+    Args:
+        model: Model identifier.
+        response_format: Schema input accepted by ``build_response_format``.
+        input: A prompt string (sent as a single user message) or a list of
+            chat messages.
+        temperature: Optional temperature value.
+        max_tokens: Optional max output tokens.
+        seed: Optional deterministic seed.
+        extra: Additional chat-completions parameters. Merged first so the
+            assembled keys (``model``, ``messages``, ``response_format``)
+            take precedence over caller-provided duplicates.
+
+    Returns:
+        A mutable dict suitable to pass as the request body.
+    """
+    if isinstance(input, str):
+        input = [{"role": "user", "content": input}]
+    payload: dict[str, Any] = {
+        **(extra or {}),
+        "model": model,
+        "messages": input,
+        "response_format": build_response_format(response_format),
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    return payload
