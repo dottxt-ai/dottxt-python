@@ -74,6 +74,7 @@ Output rules:
   targeted error with guidance to run `dottxt models` and set `DOTTXT_MODEL`
   or pass `--model`
 
+<<<<<<< HEAD
 ### `dottxt schema check`
 
 Validate a schema file as JSON Schema.
@@ -82,3 +83,16 @@ Validate a schema file as JSON Schema.
 - `<schema-file>`: JSON file path to validate
 - `--json`: emits structured payload including `status` and `schema_file`
 - Errors follow the shared `--json` error envelope when enabled
+=======
+### `dottxt stream`
+
+Stream one generation as it is produced using JSON Patch RFC 6902.
+
+- `-m, --model TEXT`: model id (required unless `DOTTXT_MODEL` is set)
+- `-s, --schema FILE`: schema file path (required)
+- `[PROMPT]`: literal prompt text (falls back to stdin, same rules as `generate`)
+
+Output rules:
+
+- stdout: one RFC 6902 `add` op per line (NDJSON), in arrival order.
+>>>>>>> d5cc04a (Add JSON Patch streaming support)

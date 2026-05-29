@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
@@ -21,7 +22,8 @@ from openai import (
 )
 
 from dottxt import __version__
-from dottxt.client import DotTxt
+from dottxt.client import AsyncDotTxt, DotTxt
+from dottxt.streaming import PatchStreamError
 
 
 def _credentials_path() -> Path:
@@ -617,3 +619,118 @@ def generate(
         _emit(response, json_mode=json_mode)
         return
     _emit(response["result"], json_mode=False)
+
+
+async def _run_stream(
+    *,
+    api_key: str,
+    model: str,
+    schema_text: str,
+    prompt: str,
+    json_mode: bool,
+) -> None:
+    """Stream patch ops to stdout as NDJSON.
+
+    One RFC 6902 op per line on stdout (machine-readable, pipeable).
+    """
+    client = AsyncDotTxt(api_key=api_key)
+    try:
+        stream = client.stream(
+            model=model,
+            response_format=schema_text,
+            input=prompt,
+        )
+        async for event in stream:
+            click.echo(json.dumps(event.op, separators=(",", ":")))
+    except PatchStreamError as exc:
+        if _is_model_unavailable_error(exc):
+            _fail(
+                (
+                    f"Model '{model}' is not available for this API key. "
+                    "Run 'dottxt models' to choose an available model, then set "
+                    "DOTTXT_MODEL or pass --model."
+                ),
+                json_mode=json_mode,
+            )
+        detail = exc.body.strip()
+        message = f"Stream failed with API status {exc.status_code}."
+        _fail(f"{message} {detail[:200]}".strip(), json_mode=json_mode)
+    except Exception as exc:
+        _fail(f"Stream failed: {exc}", json_mode=json_mode)
+    finally:
+        await client.close()
+
+
+@main.command(name="stream")
+@click.option(
+    "-m",
+    "--model",
+    envvar="DOTTXT_MODEL",
+    required=True,
+    show_envvar=True,
+    help="Model to use.",
+)
+@click.option(
+    "-s",
+    "--schema",
+    "schema_file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    required=True,
+    help="JSON Schema file.",
+)
+@click.argument("prompt_arg", required=False, metavar="[PROMPT]")
+@click.pass_context
+def stream(
+    ctx: click.Context,
+    model: str,
+    schema_file: Path,
+    prompt_arg: str | None,
+) -> None:
+    """Stream a structured response as NDJSON patch ops.
+
+    Emits one RFC 6902 add op per line on stdout as the model fills in the
+    schema. PROMPT is literal text and is required unless stdin is piped.
+    The model resolves from --model, then DOTTXT_MODEL.
+    """
+    json_mode = bool(ctx.obj["json_mode"])
+    if not schema_file.exists() or not schema_file.is_file():
+        _fail(f"Schema file not found: {schema_file}", json_mode=json_mode)
+
+    schema_text = schema_file.read_text(encoding="utf-8")
+    try:
+        json.loads(schema_text)
+    except json.JSONDecodeError as exc:
+        _fail(f"Schema file is not valid JSON: {exc.msg}", json_mode=json_mode)
+
+    if prompt_arg is not None:
+        final_prompt = prompt_arg
+    else:
+        final_prompt = _read_stdin_prompt()
+    if not final_prompt:
+        _fail("No prompt provided. Use PROMPT or pipe stdin.", json_mode=json_mode)
+
+    resolved_api_key = _resolve_api_key()
+    if not resolved_api_key:
+        _fail(
+            "No API key available. Run 'dottxt login' or set DOTTXT_API_KEY.",
+            json_mode=json_mode,
+        )
+
+    _emit_verbose(
+        ctx,
+        "Starting stream.",
+        data={
+            "model": model,
+            "schema_file": str(schema_file),
+            "prompt_length": len(final_prompt),
+        },
+    )
+    asyncio.run(
+        _run_stream(
+            api_key=resolved_api_key,
+            model=model,
+            schema_text=schema_text,
+            prompt=final_prompt,
+            json_mode=json_mode,
+        )
+    )

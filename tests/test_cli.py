@@ -12,6 +12,7 @@ from click.testing import CliRunner, Result
 
 from dottxt import cli as cli_module
 from dottxt.cli import main
+from dottxt.streaming import PatchEvent, PatchStreamError
 
 VALID_SCHEMA = '{"type":"object"}'
 STUB_RESULT = {"status": "stub", "message": "SDK call not wired yet."}
@@ -80,6 +81,57 @@ class FakeDotTxt:
         self.__class__.close_calls += 1
 
 
+STREAM_EVENTS = [
+    PatchEvent(op={"op": "add", "path": "", "value": {}}, snapshot={}),
+    PatchEvent(
+        op={"op": "add", "path": "/name", "value": "Ada"},
+        snapshot={"name": "Ada"},
+    ),
+    PatchEvent(
+        op={"op": "add", "path": "/age", "value": 35},
+        snapshot={"name": "Ada", "age": 35},
+    ),
+]
+
+
+class FakeAsyncDotTxt:
+    """Stub AsyncDotTxt client used by CLI streaming tests."""
+
+    init_api_keys: list[str] = []
+    stream_calls: list[dict[str, object]] = []
+    close_calls: int = 0
+    events: list[PatchEvent] = list(STREAM_EVENTS)
+    raise_error: Exception | None = None
+
+    def __init__(self, *, api_key: str) -> None:
+        """Initialize fake async client with provided key."""
+        self.__class__.init_api_keys.append(api_key)
+
+    def stream(
+        self,
+        *,
+        model: str,
+        response_format: str,
+        input: str,
+    ) -> object:
+        """Record stream arguments and return an async iterator of events."""
+        self.__class__.stream_calls.append(
+            {"model": model, "response_format": response_format, "input": input}
+        )
+        return self._iter_events()
+
+    async def _iter_events(self) -> object:
+        """Yield configured events, or raise the configured error."""
+        if self.__class__.raise_error is not None:
+            raise self.__class__.raise_error
+        for event in self.__class__.events:
+            yield event
+
+    async def close(self) -> None:
+        """Record close calls."""
+        self.__class__.close_calls += 1
+
+
 @pytest.fixture
 def runner() -> CliRunner:
     """Return a CLI test runner."""
@@ -93,8 +145,14 @@ def patch_dotxt_client(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeDotTxt.generate_calls.clear()
     FakeDotTxt.models_calls = 0
     FakeDotTxt.close_calls = 0
+    FakeAsyncDotTxt.init_api_keys.clear()
+    FakeAsyncDotTxt.stream_calls.clear()
+    FakeAsyncDotTxt.close_calls = 0
+    FakeAsyncDotTxt.events = list(STREAM_EVENTS)
+    FakeAsyncDotTxt.raise_error = None
     monkeypatch.delenv("DOTTXT_API_KEY", raising=False)
     monkeypatch.setattr(cli_module, "DotTxt", FakeDotTxt)
+    monkeypatch.setattr(cli_module, "AsyncDotTxt", FakeAsyncDotTxt)
     monkeypatch.setattr(cli_module, "_resolve_api_key", lambda: "test-key")
 
 
@@ -930,3 +988,140 @@ def test_emit_verbose_non_dict_data_is_compact_json(
 
     captured = capsys.readouterr()
     assert captured.err.strip() == "[verbose] payload [1,2,3]"
+
+
+def test_stream_emits_one_ndjson_op_per_line(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """Stream should write one raw RFC 6902 op per line on stdout."""
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(schema_file), "profile"],
+    )
+
+    assert result.exit_code == 0
+    lines = result.stdout.strip().splitlines()
+    ops = [json.loads(line) for line in lines]
+    assert ops == [event.op for event in STREAM_EVENTS]
+    assert FakeAsyncDotTxt.stream_calls[-1]["model"] == "openai/gpt-oss-20b"
+    assert FakeAsyncDotTxt.stream_calls[-1]["input"] == "profile"
+    assert FakeAsyncDotTxt.close_calls == 1
+
+
+def test_stream_requires_a_prompt(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """Stream should fail when neither positional prompt nor stdin is provided."""
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(schema_file)],
+    )
+
+    assert result.exit_code != 0
+    assert FakeAsyncDotTxt.stream_calls == []
+
+
+def test_stream_surfaces_patch_stream_error(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """An upstream non-200 should surface as a failure mentioning the status."""
+    FakeAsyncDotTxt.raise_error = PatchStreamError(
+        status_code=503, body="upstream unavailable"
+    )
+
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(schema_file), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "503" in result.output + result.stderr
+    # The client is still closed on the error path.
+    assert FakeAsyncDotTxt.close_calls == 1
+
+
+def test_stream_model_unavailable_gives_targeted_guidance(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """A model-unavailable upstream error should reuse the generate guidance."""
+    FakeAsyncDotTxt.raise_error = PatchStreamError(
+        status_code=404, body="model not found"
+    )
+
+    result = _invoke(
+        runner,
+        ["stream", "-m", "missing/model", "-s", str(schema_file), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "not available for this API key" in result.output + result.stderr
+
+
+def test_stream_unexpected_error_surfaces(
+    runner: CliRunner,
+    schema_file: Path,
+) -> None:
+    """A non-API error should surface as a generic stream failure."""
+    FakeAsyncDotTxt.raise_error = RuntimeError("boom")
+
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(schema_file), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "Stream failed: boom" in result.output + result.stderr
+    assert FakeAsyncDotTxt.close_calls == 1
+
+
+def test_stream_missing_schema_file_fails(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """Stream should fail when the schema file does not exist."""
+    missing = tmp_path / "nope.json"
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(missing), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "Schema file not found" in result.output + result.stderr
+    assert FakeAsyncDotTxt.stream_calls == []
+
+
+def test_stream_invalid_schema_json_fails(
+    runner: CliRunner,
+    tmp_path: Path,
+) -> None:
+    """Stream should fail when the schema file is not valid JSON."""
+    bad = _create_schema(tmp_path, content="{not json", name="bad.json")
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(bad), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "not valid JSON" in result.output + result.stderr
+    assert FakeAsyncDotTxt.stream_calls == []
+
+
+def test_stream_without_api_key_fails(
+    runner: CliRunner,
+    schema_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stream should fail when no API key can be resolved."""
+    monkeypatch.setattr(cli_module, "_resolve_api_key", lambda: None)
+    result = _invoke(
+        runner,
+        ["stream", "-m", "openai/gpt-oss-20b", "-s", str(schema_file), "profile"],
+    )
+
+    assert result.exit_code != 0
+    assert "No API key available" in result.output + result.stderr
+    assert FakeAsyncDotTxt.stream_calls == []
