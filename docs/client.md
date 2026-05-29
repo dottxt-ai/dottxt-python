@@ -227,7 +227,9 @@ Parameters mirror `generate(...)`:
 
 Each `PatchEvent` carries:
 
-- `event.op` — the raw RFC 6902 operation (`{"op": "add", "path": ..., "value": ...}`)
+- `event.op` — the raw RFC 6902 operation (`{"op": "add", "path": ..., "value": ...}`).
+  The dottxt API only ever emits `add` ops; `dottxt.apply_add(doc, path, value)`
+  folds one into a object in place, returning the (possibly new) root.
 - `event.snapshot` — an independent deep copy of the JSON object built up to
   and including this op
 - `event.is_leaf` / `event.field` / `event.value` convenience demux for
@@ -273,6 +275,26 @@ The routing decision fires the moment `intent` arrives, typically tens of
 milliseconds in while `reply` continues to stream. If you need the full
 object so far (e.g. to log progress or hand a partial object to another
 service), use `event.snapshot`.
+
+To drive your own state from the raw ops instead of the snapshot (e.g. to
+mirror the object into a store of your own) fold each `event.op` in with
+`apply_add`:
+
+```python
+from dottxt import AsyncDotTxt, apply_add
+
+async def main():
+    client = AsyncDotTxt()
+    doc = {}  # the stream's first op is the root seed
+    stream = client.stream(
+        model="openai/gpt-oss-20b",
+        response_format=SupportTicket,
+        input="I was charged twice this month, please refund the duplicate.",
+    )
+    async for event in stream:
+        doc = apply_add(doc, event.op["path"], event.op["value"])
+        print(doc)
+```
 
 Errors:
 
