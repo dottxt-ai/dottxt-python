@@ -22,6 +22,7 @@ if __name__ == "__main__":
     result = client.generate(
         model="openai/gpt-oss-20b",
         input=(
+            "User lives at 1 main street and has credit card number `12345678910`."
             "Return a JSON object representing a payment payload. "
             "Include credit_card and billing_address fields."
         ),
