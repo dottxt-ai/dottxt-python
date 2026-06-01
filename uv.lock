@@ -223,9 +223,9 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1" },
-    { name = "jsonschema", specifier = ">=4.26.0" },
+    { name = "jsonschema", specifier = ">=4.26" },
     { name = "openai", specifier = ">=2.31" },
-    { name = "pydantic", specifier = ">=2" },
+    { name = "pydantic", specifier = ">=2.11" },
 ]
 
 [package.metadata.requires-dev]
