@@ -17,7 +17,6 @@ from typing import Any, Self
 from pydantic import BaseModel
 from pydantic.annotated_handlers import GetJsonSchemaHandler
 
-from .compatibility import apply_compatibility_mode
 from .constraint import Constraint, build_constraints, compute_constraints
 
 CONDITIONALS_REF_MARKER = "$$ref"
@@ -67,7 +66,7 @@ def _normalize_require_fields(field: str | tuple[str] | list[str]) -> list[str]:
         return list(field)
     if isinstance(field, list):
         return field
-    raise ValueError("Parameter should be list or str.")
+    raise ValueError("Parameter must be a list or str.")
 
 
 class QueryBuilder:
@@ -137,8 +136,8 @@ class QueryBuilder:
             and self.conditions
         ):
             raise ValueError(
-                "Canot combine wheres specified with Schemas with ones specified "
-                "with conditions."
+                "Cannot combine where clauses specified with schemas with "
+                "ones specified with conditions."
             )
 
         conditions = self.conditions[0] if len(self.conditions) == 1 else {}
@@ -179,8 +178,8 @@ class QueryBuilder:
             and self.conditions
         ):
             raise ValueError(
-                "Canot combine wheres specified with Schemas with ones specified "
-                "with conditions."
+                "Cannot combine where clauses specified with schemas with "
+                "ones specified with conditions."
             )
 
         if isinstance(other, DependentSchemaBuilder):
@@ -227,7 +226,7 @@ class QueryBuilder:
 
     def then_apply_only(self, schema: type[BaseModel]) -> Self:
         """Mixes in this schema when the condition is met (``then`` clause).
-        "additionalPropertes" is set to false!
+        ``additionalProperties`` is set to ``False``.
 
         This does not combine with ``constrain`` or other ``then_apply`` methods.
         The last ``then_apply`` will take precedence.
@@ -254,7 +253,7 @@ class QueryBuilder:
 
     def else_apply_only(self, schema: type[BaseModel]) -> Self:
         """Mixes in this schema when the condition is *not* met (``else`` clause).
-        "additionalPropertes" is set to false!
+        ``additionalProperties`` is set to ``False``.
 
         This does not combine with ``otherwise`` or other ``else_apply`` methods.
         The last ``else_apply`` will take precedence.
@@ -561,22 +560,10 @@ class ConditionalModel:
     def model_json_schema(
         cls,
         *args,
-        compatibility_mode: str | bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Generate JSON Schema for this model, applying compatibility mode if needed.
-
-        Args:
-            compatibility_mode: Controls schema conversion.
-                ``False`` (default) -- no conversion.
-                ``True`` -- full conversion (dependentRequired/Schemas -> if/then/else).
-                to if/then/else only.
-        """
+        """Generate JSON Schema for this model."""
         result = super().model_json_schema(*args, **kwargs)  # type: ignore[misc]
         result = _remove_conditionals_ref_marker(result)
-
-        mode = compatibility_mode or getattr(cls, "model_compatibility_mode", False)
-        if mode is True:
-            result = apply_compatibility_mode(result)
 
         return result

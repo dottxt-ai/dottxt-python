@@ -45,6 +45,7 @@ Use the `dottxt` CLI for login, model discovery, and one-off generation.
 - CLI reference: [docs/cli.md](docs/cli.md)
 - Client reference: [docs/client.md](docs/client.md)
 - Schema validation: `dottxt schema check schema.json`
+- Pydantic conditionals: [docs/pydantic.md](docs/pydantic.md)
 
 ## Client Surfaces
 
@@ -275,6 +276,8 @@ The compatibility surface expects the wrapped OpenAI-style
 - [Use a dataclass type to generate](examples/generate_dataclass.py)
 - [Use a TypedDict type to generate](examples/generate_typed_dict.py)
 - [Use a Genson schema builder to generate](examples/generate_genson.py)
+- [Pydantic conditionals: value-based `when`](examples/pydantic_conditionals_when.py)
+- [Pydantic conditionals: presence-based `when_present`](examples/pydantic_conditionals_when_present.py)
 - [List available models](examples/list_models.py)
 - [OpenAI-Compatible chat completions](examples/openai_chat_completions.py)
 - [Stream fields as they arrive](examples/stream_field_printer.py)

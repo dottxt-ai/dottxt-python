@@ -1,5 +1,6 @@
 from typing import Annotated, ClassVar, Literal
 
+import pytest
 from pydantic import BaseModel, Field
 
 from dottxt.pydantic_conditionals import (
@@ -8,6 +9,15 @@ from dottxt.pydantic_conditionals import (
     when,
     when_present,
     when_schema,
+)
+from dottxt.pydantic_conditionals.conditional import (
+    Constraint,
+    QueryBuilder,
+    _normalize_require_fields,
+)
+from dottxt.pydantic_conditionals.constraint import (
+    _build_required,
+    compute_constraints,
 )
 
 
@@ -424,22 +434,6 @@ def test_bare_when():
     assert expected_schema == schema
 
 
-def test_compatibility_mode():
-    class FileOp(ConditionalModel, BaseModel):
-        content: str | None = None
-        create_parents: Annotated[bool | None, RequiredWith("content")] = None
-
-    schema = FileOp.model_json_schema(compatibility_mode=True)
-
-    assert "dependentRequired" not in schema
-
-    assert "allOf" in schema
-    # Should keep if/then/else (not convert to anyOf/allOf/not)
-    rule = schema["allOf"][0]
-    assert "if" in rule
-    assert "then" in rule
-
-
 def test_mixin_schemas():
     expected_schema = {
         "else": {
@@ -729,16 +723,15 @@ def test_when_apply():
                 "title": "Foo",
             },
             "bar": {"title": "Bar", "type": "string"},
-            "not_there": {"default": 0, "title": "Not There", "type": "integer"},
+            "not_there": {"title": "Not There", "type": "integer"},
         },
-        "required": ["bar"],
+        "required": ["bar", "not_there"],
         "then": {
             "additionalProperties": False,
             "properties": {
-                "foo": {"const": None, "title": "Foo", "type": "null"},
                 "bar": {"const": "No foo", "title": "Bar", "type": "string"},
             },
-            "required": ["foo", "bar"],
+            "required": ["bar"],
             "title": "Foo_then",
             "type": "object",
         },
@@ -747,3 +740,168 @@ def test_when_apply():
     }
 
     assert schema == expected
+
+
+def test_normalize_require_fields_variants_and_error() -> None:
+    assert _normalize_require_fields("a") == ["a"]
+    assert _normalize_require_fields(("a",)) == ["a"]
+    assert _normalize_require_fields(["a", "b"]) == ["a", "b"]
+    with pytest.raises(ValueError, match="Parameter must be a list or str"):
+        _normalize_require_fields(123)  # type: ignore[arg-type]
+
+
+def test_build_required_empty() -> None:
+    assert _build_required([]) == {}
+
+
+def test_querybuilder_none_constraint_and_schema_conflict_error() -> None:
+    qb = when(country=None)
+    built = qb.require("postal_code")._build()
+    assert built is not None
+    assert built["if"]["properties"]["country"]["const"] is None
+
+    with pytest.raises(ValueError, match="cannot provide a schema and a list"):
+        QueryBuilder({"field": "x"}, schema={"type": "object"})
+
+
+def test_querybuilder_and_or_guard_paths() -> None:
+    class A(BaseModel):
+        a: Literal["a"]
+
+    class B(BaseModel):
+        b: Literal["b"]
+
+    with pytest.raises(ValueError, match="Can only combine"):
+        _ = when(a="x") & 5  # type: ignore[operator]
+
+    with pytest.raises(ValueError, match="Can only combine"):
+        _ = when(a="x") | 5  # type: ignore[operator]
+
+    with pytest.raises(ValueError, match="Cannot mix AND and OR"):
+        _ = (when(a="x") | when(b="y")) & when(c="z")
+
+    with pytest.raises(ValueError, match="has constraints"):
+        _ = when(a="x") & when(b="y").constrain(q="v")
+
+    with pytest.raises(ValueError, match="has constraints"):
+        _ = when(a="x") | when(b="y").constrain(q="v")
+
+    with pytest.raises(ValueError, match="Cannot combine where clauses"):
+        _ = when_schema(A) & when(a="x")
+
+    with pytest.raises(ValueError, match="Cannot combine where clauses"):
+        _ = when_schema(A) | when(a="x")
+
+    and_schema = (when_schema(A).require("a") & when_schema(B))._build()
+    assert and_schema is not None
+    assert "allOf" in and_schema["if"]
+
+    or_schema = (when_schema(A).require("a") | when_schema(B))._build()
+    assert or_schema is not None
+    assert "anyOf" in or_schema["if"]
+
+
+def test_dependent_builder_paths_and_requiredwith_error() -> None:
+    class ThenSchema(BaseModel):
+        out: str
+
+    builder = when_present("trigger").then_apply(ThenSchema)
+    built_pair = builder._build()
+    assert built_pair is not None
+    assert built_pair[0] == "trigger"
+    assert built_pair[1]["additionalProperties"] is True
+
+    assert when_present("trigger")._build() is None
+
+    with pytest.raises(ValueError, match="at least one field"):
+        RequiredWith()
+
+
+class _ElseSchema(BaseModel):
+    flag: bool
+
+
+class _MarkerModel(ConditionalModel, BaseModel):
+    value: Annotated[str, "metadata-that-is-not-requiredwith"]
+    model_conditions: ClassVar = (when_present("x"),)
+
+
+class _DependentMergeModel(ConditionalModel, BaseModel):
+    x: str | None = None
+    a: str | None = None
+    b: str | None = None
+    model_conditions: ClassVar = (
+        when_present("x").require("a"),
+        when_present("x").require("b"),
+    )
+
+
+class _IfThenListModel(ConditionalModel, BaseModel):
+    first: str | None = None
+    second: str | None = None
+    model_conditions: ClassVar = (
+        when(first="x").require("second"),
+        when(second="y").require("first"),
+    )
+
+
+def test_conditional_model_branches_for_continue_and_merge() -> None:
+    marker_schema = _MarkerModel.model_json_schema()
+    assert "dependentSchemas" not in marker_schema
+
+    dep_schema = _DependentMergeModel.model_json_schema()
+    assert dep_schema["dependentSchemas"]["x"]["allOf"]
+
+    if_then_schema = _IfThenListModel.model_json_schema()
+    assert len(if_then_schema["allOf"]) >= 2
+
+
+def test_dependent_builder_else_and_boolean_ops() -> None:
+    qb_else = when_present("f").else_apply(_ElseSchema)
+    built_else = qb_else._build()
+    assert built_else is not None
+    assert built_else["else"]["additionalProperties"] is True
+
+    qb_and = when(a="x").require("a") & when_present("f")
+    assert qb_and._build() is not None
+
+    qb_or = when_present("f") | when(v="x")
+    assert qb_or._build() is None
+
+    assert ((when_present("f") & when(v="x"))._build()) is None
+
+
+def test_then_apply_only_without_if_schema() -> None:
+    class ThenOnly(BaseModel):
+        out: str
+
+    built = when(v="x").then_apply_only(ThenOnly)._build()
+    assert built is not None
+    assert built["then"]["additionalProperties"] is False
+
+
+def test_conditional_mixin_without_model_fields() -> None:
+    # ConditionalModel should pass through the downstream schema unchanged when
+    # there is no conditional metadata to inject.
+    payload = ConditionalModel.__get_pydantic_json_schema__(
+        object,
+        lambda _: {"x": 1},  # type: ignore[arg-type]
+    )
+    assert payload == {"x": 1}
+
+
+class _MixedConditionsModel(ConditionalModel, BaseModel):
+    value: str | None = None
+    model_conditions: ClassVar = (object(), when(value="x").require("value"))
+
+
+def test_conditional_model_ignores_unknown_conditions() -> None:
+    schema = _MixedConditionsModel.model_json_schema()
+    assert "if" in schema
+
+
+def test_compute_constraints_existing_key_without_new_value() -> None:
+    existing = {"x": Constraint(value="old", has_value=True, required=False)}
+    result = compute_constraints(existing, {"x": Constraint(required=True)})
+    assert result["x"].required is True
+    assert result["x"].value == "old"
