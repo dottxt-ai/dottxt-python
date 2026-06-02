@@ -37,26 +37,12 @@ class PatchEvent:
     is an independent deep copy, so callers may stash events without later
     ops mutating earlier snapshots.
 
-    The ``is_leaf`` / ``field`` / ``value`` properties demux the op for the
+    The ``field`` / ``value`` properties demux the op for the
     common pattern of reacting to one structured-output field at a time.
     """
 
     op: dict[str, Any]
     snapshot: dict[str, Any] | list[Any]
-
-    @property
-    def is_leaf(self) -> bool:
-        """True iff this op contributes a single leaf value.
-
-        False for the root seed (``path == ""``), for empty-container init
-        ops (``value`` is ``{}`` or ``[]``), and for any op that is not an
-        ``add``.
-        """
-        return (
-            self.op.get("op") == "add"
-            and self.op.get("path", "") != ""
-            and self.op.get("value") not in ({}, [])
-        )
 
     @property
     def field(self) -> str:

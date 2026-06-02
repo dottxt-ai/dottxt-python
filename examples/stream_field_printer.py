@@ -34,7 +34,7 @@ async def main() -> None:
             input="Generate a profile for a senior backend engineer.",
         )
         async for event in stream:
-            if not event.is_leaf:
+            if not event.value:
                 continue
             print(f"{event.field:>24} = {event.value!r}")
     finally:

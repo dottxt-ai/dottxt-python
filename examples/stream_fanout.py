@@ -76,7 +76,7 @@ async def main() -> None:
             max_tokens=400,
         )
         async for event in stream:
-            if not event.is_leaf:
+            if not event.value:
                 continue
             elapsed_ms = int((time.monotonic() - started) * 1000)
             if event.field.startswith("steps/"):

@@ -11,36 +11,6 @@ import pytest
 from dottxt.streaming import PatchEvent, PatchStreamError, apply_add, stream
 
 
-def test_patch_event_is_leaf_for_top_level_leaf() -> None:
-    """A non-empty add at a non-root path is a leaf."""
-    event = PatchEvent(
-        op={"op": "add", "path": "/intent", "value": "billing"},
-        snapshot={"intent": "billing"},
-    )
-    assert event.is_leaf is True
-    assert event.field == "intent"
-    assert event.value == "billing"
-
-
-def test_patch_event_is_leaf_false_for_root_seed() -> None:
-    """The root seed op is structural, not a leaf."""
-    event = PatchEvent(op={"op": "add", "path": "", "value": {}}, snapshot={})
-    assert event.is_leaf is False
-    assert event.field == ""
-
-
-def test_patch_event_is_leaf_false_for_empty_container() -> None:
-    """Empty-object and empty-array seed ops are structural."""
-    obj_seed = PatchEvent(
-        op={"op": "add", "path": "/address", "value": {}}, snapshot={"address": {}}
-    )
-    arr_seed = PatchEvent(
-        op={"op": "add", "path": "/steps", "value": []}, snapshot={"steps": []}
-    )
-    assert obj_seed.is_leaf is False
-    assert arr_seed.is_leaf is False
-
-
 def test_patch_event_field_for_array_index_and_nested_path() -> None:
     """Array indices and nested object paths keep their joined segments."""
     arr = PatchEvent(
@@ -53,15 +23,6 @@ def test_patch_event_field_for_array_index_and_nested_path() -> None:
     )
     assert arr.field == "steps/0"
     assert nested.field == "address/city"
-
-
-def test_patch_event_is_leaf_handles_falsy_primitives() -> None:
-    """Falsy primitives (0, "", False) are still leaves, only {} / [] are structural."""
-    for value in (0, "", False, None):
-        event = PatchEvent(
-            op={"op": "add", "path": "/x", "value": value}, snapshot={"x": value}
-        )
-        assert event.is_leaf is True, value
 
 
 def test_apply_add_replaces_root_for_empty_path() -> None:

@@ -74,8 +74,6 @@ async def main() -> None:
             max_tokens=300,
         )
         async for event in stream:
-            if not event.is_leaf:
-                continue
             match event.field:
                 case "action":
                     proposed_action = event.value

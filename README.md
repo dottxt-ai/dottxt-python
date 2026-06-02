@@ -171,8 +171,7 @@ mode (RFC 6902 JSON Patch over NDJSON).
 
 Each event carries the raw op (`event.op`) and an independent deep copy of the
 document so far (`event.snapshot`). For the common case of reacting to one
-field at a time, use the demux properties: `event.is_leaf` skips structural
-ops (root seed, empty-container init), `event.field` is the JSON Pointer with
+field at a time, use the demux properties: `event.field` is the JSON Pointer with
 the leading `/` stripped (`"intent"`, `"steps/0"`, `"address/city"`), and
 `event.value` is the op's value.
 
@@ -200,8 +199,6 @@ async def main() -> None:
         input="I was charged twice this month, please refund the duplicate.",
     )
     async for event in stream:
-        if not event.is_leaf:
-            continue
         match event.field:
             case "intent":
                 print(f"dispatching to {event.value} queue")
