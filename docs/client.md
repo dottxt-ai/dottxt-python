@@ -232,11 +232,9 @@ Each `PatchEvent` carries:
   folds one into a object in place, returning the (possibly new) root.
 - `event.snapshot` — an independent deep copy of the JSON object built up to
   and including this op
-- `event.is_leaf` / `event.field` / `event.value` convenience demux for
-  the common case of reacting to one field at a time. `is_leaf` is `True`
-  for non-structural adds (skipping the root seed and empty-container init
-  ops); `field` is the JSON Pointer with the leading `/` stripped
-  (`"intent"`, `"steps/0"`, `"address/city"`).
+- `event.field` / `event.value` — `field` is the JSON Pointer with the leading `/` stripped
+  (`"intent"`, `"steps/0"`, `"address/city"`). `value` contains the current field content,
+  including empty lists `[]` or dictionary `{}` values.
 
 ```python
 import asyncio
@@ -258,8 +256,6 @@ async def main():
         input="I was charged twice this month, please refund the duplicate.",
     )
     async for event in stream:
-        if not event.is_leaf:
-            continue
         match event.field:
             case "intent":
                 asyncio.create_task(dispatch_to_queue(event.value))
